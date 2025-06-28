@@ -54,6 +54,9 @@ class PY_EXECUTABLES:
     # aren't installed. Simple workaround is to always run the mcore py_executable with --reinstall.
     MCORE = "uv run --reinstall --extra mcore"
 
+    # InfiniSST
+    INFINISSST = "uv run --locked --extra infinisst"
+
 
 @ray.remote
 def _get_node_ip_and_free_port() -> tuple[str, int]:

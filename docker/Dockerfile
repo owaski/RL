@@ -72,6 +72,7 @@ uv venv ${UV_PROJECT_ENVIRONMENT}
 uv sync --link-mode symlink --locked --no-install-project
 uv sync --link-mode symlink --locked --extra vllm --no-install-project
 uv sync --link-mode symlink --locked --extra mcore --no-install-project
+uv sync --link-mode symlink --locked --extra infinisst --no-install-project
 uv sync --link-mode symlink --locked --all-groups --no-install-project
 EOF
 

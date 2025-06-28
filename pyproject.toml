@@ -59,6 +59,9 @@ mcore = [
     "megatron-core",
     "nemo-tron",
 ]
+infinisst = [
+    "unbabel-comet>=2.2.0"
+]
 
 [dependency-groups]
 
