@@ -374,6 +374,7 @@ def run_multi_turn_rollout(
                 "input_ids": active_input_ids,
                 "input_lengths": active_input_lengths,
                 "stop_strings": active_stop_strings,
+                "features": active_flat_messages["features"],
             }
         )
 

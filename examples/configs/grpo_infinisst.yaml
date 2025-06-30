@@ -18,6 +18,7 @@ checkpointing:
 
 policy:
   model_name: "/ckpts/infinisst/yodas_5kh_v2_m12_stage2_7b_1node/checkpoints/step=2000-last.ckpt.hf"
+  # model_name: "/ckpts/llm/qwen2.5-0.5b-instruct"
   max_total_sequence_length: 2048
 
   dtensor_cfg:
@@ -39,6 +40,7 @@ policy:
     top_k: null
     stop_token_ids: null
     stop_strings: null
+    audio_token_id: 151656
     vllm_cfg:
       async_engine: false
       precision: ${policy.precision}
@@ -47,9 +49,9 @@ policy:
       gpu_memory_utilization: 0.6
       max_model_len: ${policy.max_total_sequence_length}
     colocated:
-      enabled: false
+      enabled: true
       resources:
-        gpus_per_node: 1
+        gpus_per_node: null
         num_nodes: null
 
 data:
@@ -85,5 +87,5 @@ logger:
     flush_interval: 10  # How often to flush GPU usage metrics to the loggers (in seconds)
 
 cluster:
-  gpus_per_node: 2
+  gpus_per_node: 1
   num_nodes: 1

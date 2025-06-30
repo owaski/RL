@@ -37,6 +37,8 @@ import ray
 import torch
 from ray.util.placement_group import PlacementGroup
 
+from transformers import AutoModelForCausalLM
+
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict, SlicedDataDict
 from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.distributed.virtual_cluster import (
@@ -170,6 +172,11 @@ class VllmGenerationWorker:
         self.cfg = config
 
         self.model_name = self.cfg["model_name"]
+        transformers_model = AutoModelForCausalLM.from_pretrained(self.model_name)
+        self.embedding_layer = transformers_model.get_input_embeddings()
+        del transformers_model
+        gc.collect()
+
         self.tensor_parallel_size = self.cfg["vllm_cfg"]["tensor_parallel_size"]
         self.pipeline_parallel_size = self.cfg["vllm_cfg"]["pipeline_parallel_size"]
         self.gpu_memory_utilization = self.cfg["vllm_cfg"]["gpu_memory_utilization"]
@@ -467,15 +474,18 @@ class VllmGenerationWorker:
         # Prepare prompts for vLLM (removing padding)
         prompts = []
 
+        breakpoint()
         for i in range(batch_size):
             # Use input_lengths to get only valid tokens (not padding)
             valid_length = input_lengths[i].item()
             valid_ids = (
                 input_ids[i, :valid_length] if valid_length > 0 else input_ids[i, :0]
             )
-            token_ids = valid_ids.tolist()
+            # token_ids = valid_ids.tolist()
+            prompt_embeds = self.embedding_layer(valid_ids)
+            prompt_embeds[valid_ids == self.cfg["audio_token_id"]] = torch.from_numpy(data["features"][i][0].copy())
 
-            prompts.append({"prompt_token_ids": token_ids})
+            prompts.append({"prompt_embeds": prompt_embeds})
 
         # Generate outputs
         assert self.llm is not None, (

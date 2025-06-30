@@ -75,7 +75,7 @@ class InfiniSSTEnv(EnvironmentInterface):
                 observations.append({
                     "role": "user",
                     "content": "<|video_pad|>" * chunk_frame_size,
-                    "features": metadata["features"][step * chunk_frame_size : (step + 1) * chunk_frame_size],
+                    "features": metadata["features"][: (step + 1) * chunk_frame_size],
                 })
             all_stop_strings.append(None)
             metadata["step"] += 1

@@ -85,7 +85,7 @@ class IterableInfiniSSTDataset(IterableDataset):
                 self.df.iloc[i % len(self.df)]
             data = row.to_dict()
 
-            features = np.load(data['audio_npy_path'], mmap_mode='r')[data['audio_npy_row']].copy()
+            features = np.load(data['audio_npy_path'], mmap_mode='r')[data['audio_npy_row']]
             first_step_features = features[:data['chunk_frame_size']]
             
             instruction = INSTRUCTION.format(CODE2LANG[self.src_lang], CODE2LANG[self.tgt_lang])
