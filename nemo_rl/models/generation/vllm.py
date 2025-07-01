@@ -330,11 +330,11 @@ class VllmGenerationWorker:
         llm_kwargs = dict(
             model=self.model_name,
             load_format=load_format,
-            skip_tokenizer_init=self.cfg["vllm_cfg"]["skip_tokenizer_init"],
+            skip_tokenizer_init=False,
             tensor_parallel_size=self.tensor_parallel_size,
             pipeline_parallel_size=self.pipeline_parallel_size,
             gpu_memory_utilization=self.gpu_memory_utilization,
-            enable_prefix_caching=torch.cuda.get_device_capability()[0] >= 8,
+            enable_prefix_caching=False, # disable prefix caching for embedding input
             dtype=self.cfg["vllm_cfg"]["precision"],
             seed=seed,
             # Don't use cuda-graph by default as it leads to convergence issues (see https://github.com/NVIDIA/NeMo-RL/issues/186)
@@ -474,7 +474,6 @@ class VllmGenerationWorker:
         # Prepare prompts for vLLM (removing padding)
         prompts = []
 
-        breakpoint()
         for i in range(batch_size):
             # Use input_lengths to get only valid tokens (not padding)
             valid_length = input_lengths[i].item()
@@ -483,7 +482,7 @@ class VllmGenerationWorker:
             )
             # token_ids = valid_ids.tolist()
             prompt_embeds = self.embedding_layer(valid_ids)
-            prompt_embeds[valid_ids == self.cfg["audio_token_id"]] = torch.from_numpy(data["features"][i][0].copy())
+            prompt_embeds[valid_ids == self.cfg["audio_token_id"]] = torch.from_numpy(data["features"][i][0].copy())[:, :prompt_embeds.size(1)]
 
             prompts.append({"prompt_embeds": prompt_embeds})
 
@@ -491,6 +490,7 @@ class VllmGenerationWorker:
         assert self.llm is not None, (
             "Attempting to generate with either an uninitialized vLLM or non-model-owner"
         )
+        breakpoint()
         outputs = self.llm.generate(prompts, sampling_params)
 
         # Process the outputs - but preserve the original input padding structure
