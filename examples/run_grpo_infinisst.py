@@ -80,9 +80,9 @@ class IterableInfiniSSTDataset(IterableDataset):
     def __iter__(self) -> Iterator[DatumSpec]:
         print("Starting IterableInfiniSSTDataset (indefinite generation).")
         # Use itertools.count for an infinite index generator
+        df = self.df.sample(frac=1, random_state=self.seed) if self.shuffle else self.df
         for i in itertools.count():
-            row = self.df.sample(1, random_state=self.seed).iloc[0] if self.shuffle else \
-                self.df.iloc[i % len(self.df)]
+            row = df.iloc[i % len(df)]
             data = row.to_dict()
 
             features = np.load(data['audio_npy_path'], mmap_mode='r')[data['audio_npy_row']]
