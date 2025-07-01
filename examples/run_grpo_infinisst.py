@@ -85,20 +85,17 @@ class IterableInfiniSSTDataset(IterableDataset):
             row = df.iloc[i % len(df)]
             data = row.to_dict()
 
-            features = np.load(data['audio_npy_path'], mmap_mode='r')[data['audio_npy_row']]
-            first_step_features = features[:data['chunk_frame_size']]
-            
             instruction = INSTRUCTION.format(CODE2LANG[self.src_lang], CODE2LANG[self.tgt_lang])
 
             message_log = [
                 {
                     "role": "system",
                     "content": instruction,
+                    "features": (data['audio_npy_path'], data['audio_npy_row']),
                 },
                 {
                     "role": "user",
                     "content": "<|video_pad|>" * data['chunk_frame_size'],
-                    "features": first_step_features,
                 }
             ]
             tokenized_prompt = self.tokenizer.apply_chat_template(
@@ -113,9 +110,7 @@ class IterableInfiniSSTDataset(IterableDataset):
                 'message_log': message_log,
                 'length': len(tokenized_prompt),
                 'extra_env_info': {
-                    'features': features,
                     'step': 0,
-                    'max_steps': features.shape[0] // data['chunk_frame_size'],
                     'chunk_frame_size': data['chunk_frame_size'],
                     'src_segments': data['src_segments'],
                     'tgt_segments': data['tgt_segments'],

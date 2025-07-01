@@ -4,6 +4,8 @@ from typing import Any, Optional, TypedDict
 
 import ray
 import torch
+from transformers import AutoTokenizer
+import time
 
 from nemo_rl.data.interfaces import LLMMessageLogType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -17,6 +19,7 @@ class InfiniSSTConfig(TypedDict):
     scoring_model_type: str
     batch_size: int
     granularity: str
+    max_turn: int
 
 class InfiniSSTMetadata(TypedDict):
     features: torch.Tensor
@@ -37,6 +40,8 @@ class InfiniSSTEnv(EnvironmentInterface):
         self.scoring_model = load_from_checkpoint(model_path)
         self.batch_size = cfg["batch_size"]
         self.granularity = cfg["granularity"]
+        self.max_turn = cfg["max_turn"]
+        self.tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"], use_fast=True)
 
     def compute_reward(self, message_log: LLMMessageLogType, metadata: InfiniSSTMetadata) -> float:
         # TODO: delay compute reward until generate is finished
@@ -51,35 +56,47 @@ class InfiniSSTEnv(EnvironmentInterface):
     def step(
         self, message_log_batch: list[LLMMessageLogType], metadata_batch: list[InfiniSSTMetadata]
     ) -> EnvironmentReturn:
+        start_time = time.time()
         observations = []
         rewards = []
         terminateds = []
         all_stop_strings = []
         all_next_metadata = []
 
+        # breakpoint()
         for message_log, metadata in zip(message_log_batch, metadata_batch):
             step = metadata["step"]
             chunk_frame_size = metadata["chunk_frame_size"]
-            if step == metadata["max_steps"] - 1:
+            content = "<|video_pad|>" * chunk_frame_size
+            content = self.tokenizer.decode(
+                self.tokenizer.apply_chat_template( 
+                    [{"role": "user", "content": content}],
+                    add_generation_prompt=True,
+                    add_special_tokens=False,
+                )[19:], # remove system prompt from qwen2.5
+            )
+            if step == self.max_turn - 1:
                 reward = self.compute_reward(message_log, metadata)
                 rewards.append(reward)
                 terminateds.append(True)
                 observations.append({
                     "role": "user",
-                    "content": "<|video_pad|>" * chunk_frame_size,
-                    "features": None,
+                    "content": content,
                 })
             else:
                 rewards.append(0)
                 terminateds.append(False)
                 observations.append({
                     "role": "user",
-                    "content": "<|video_pad|>" * chunk_frame_size,
-                    "features": metadata["features"][: (step + 1) * chunk_frame_size],
+                    "content": content,
                 })
             all_stop_strings.append(None)
             metadata["step"] += 1
             all_next_metadata.append(metadata)
+
+        end_time = time.time()
+        elapsed = end_time - start_time
+        print(f"InfiniSSTEnv.step took {elapsed:.4f} seconds")
 
         return EnvironmentReturn(
             observations=observations,
@@ -88,7 +105,6 @@ class InfiniSSTEnv(EnvironmentInterface):
             rewards=torch.tensor(rewards, dtype=torch.float32),
             terminateds=torch.tensor(terminateds, dtype=torch.bool),
         )
-
 
     def shutdown(self):
         pass

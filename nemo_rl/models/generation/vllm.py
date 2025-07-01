@@ -474,6 +474,10 @@ class VllmGenerationWorker:
         # Prepare prompts for vLLM (removing padding)
         prompts = []
 
+        # breakpoint()
+        import time
+        start_time = time.time()
+        pathrow2features = {}
         for i in range(batch_size):
             # Use input_lengths to get only valid tokens (not padding)
             valid_length = input_lengths[i].item()
@@ -482,15 +486,23 @@ class VllmGenerationWorker:
             )
             # token_ids = valid_ids.tolist()
             prompt_embeds = self.embedding_layer(valid_ids)
-            prompt_embeds[valid_ids == self.cfg["audio_token_id"]] = torch.from_numpy(data["features"][i][0].copy())[:, :prompt_embeds.size(1)]
+            mask = valid_ids == self.cfg["audio_token_id"]
+
+            npy_path, row = data["features"][i][0]
+            if (npy_path, row) not in pathrow2features:
+                pathrow2features[(npy_path, row)] = np.load(npy_path, mmap_mode='r')[row, :mask.sum()].copy()
+            features = torch.from_numpy(pathrow2features[(npy_path, row)])
+            prompt_embeds[mask] = features[:, :prompt_embeds.size(1)]
 
             prompts.append({"prompt_embeds": prompt_embeds})
+        end_time = time.time()
+        elapsed = end_time - start_time
+        print(f"VllmGenerationWorker prompt preparation took {elapsed:.4f} seconds")
 
         # Generate outputs
         assert self.llm is not None, (
             "Attempting to generate with either an uninitialized vLLM or non-model-owner"
         )
-        breakpoint()
         outputs = self.llm.generate(prompts, sampling_params)
 
         # Process the outputs - but preserve the original input padding structure
