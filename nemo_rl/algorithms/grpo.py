@@ -541,7 +541,8 @@ def grpo_train(
                     repeated_batch["message_log"],
                     pad_value_dict={"token_ids": tokenizer.pad_token_id},
                 )
-                input_ids = batched_flat["token_ids"]
+                # input_ids = batched_flat["token_ids"]
+                input_features = batched_flat["features"]
 
             # Generate responses - this updates the LLMMessageLogType in repeated_batch
             print(f"▶ Generating responses for batch of size {repeated_batch.size}...")
@@ -592,9 +593,8 @@ def grpo_train(
                 rewards = repeated_batch["total_reward"]
 
                 print("▶ Computing advantages...")
-                # TODO: split batch into prompts
                 baseline, std = calculate_baseline_and_std_per_prompt(
-                    input_ids,
+                    input_features,
                     rewards,
                     torch.ones_like(rewards),
                     leave_one_out_baseline=master_config["grpo"][
@@ -644,6 +644,7 @@ def grpo_train(
                     {
                         "input_ids": flat_messages["token_ids"],
                         "input_lengths": input_lengths,
+                        "features": flat_messages["features"],
                         "advantages": flat_messages["advantages"],
                         "generation_logprobs": flat_messages["generation_logprobs"],
                         "token_mask": flat_messages["token_loss_mask"],

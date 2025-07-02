@@ -73,7 +73,7 @@ class InfiniSSTEnv(EnvironmentInterface):
                     [{"role": "user", "content": content}],
                     add_generation_prompt=True,
                     add_special_tokens=False,
-                )[19:], # remove system prompt from qwen2.5
+                )[20:], # remove system prompt from qwen2.5
             )
             if step == self.max_turn - 1:
                 reward = self.compute_reward(message_log, metadata)

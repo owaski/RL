@@ -98,17 +98,20 @@ class IterableInfiniSSTDataset(IterableDataset):
                     "content": "<|video_pad|>" * data['chunk_frame_size'],
                 }
             ]
-            tokenized_prompt = self.tokenizer.apply_chat_template(
+            token_ids = self.tokenizer.apply_chat_template(
                 message_log,
                 return_tensors="pt",
                 add_special_tokens=False,
                 add_generation_prompt=True,
             )[0]
-            message_log[1]['token_ids'] = tokenized_prompt
+
+            system_prompt_end = torch.nonzero(token_ids == self.tokenizer.eos_token_id)[0]
+            message_log[0]['token_ids'] = token_ids[:system_prompt_end + 1]
+            message_log[1]['token_ids'] = token_ids[system_prompt_end + 1:]
 
             datum: DatumSpec = {
                 'message_log': message_log,
-                'length': len(tokenized_prompt),
+                'length': len(token_ids),
                 'extra_env_info': {
                     'step': 0,
                     'chunk_frame_size': data['chunk_frame_size'],

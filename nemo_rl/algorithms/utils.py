@@ -14,7 +14,7 @@
 import random
 import warnings
 from functools import wraps
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -39,7 +39,7 @@ def calculate_kl_penalty_joschu2020(
 
 
 def calculate_baseline_and_std_per_prompt(
-    prompts: torch.Tensor,
+    features: List[List[Tuple[str, str]]],
     rewards: torch.Tensor,
     valid_mask: torch.Tensor,
     leave_one_out_baseline: bool = True,
@@ -58,7 +58,8 @@ def calculate_baseline_and_std_per_prompt(
     Returns:
     tensor (b,), tensor (b,) of baselines and std on the same device as 'rewards'
     """
-    unique_prompts = torch.unique(prompts, dim=0)
+    # unique_prompts = torch.unique(prompts, dim=0)
+    unique_features = list(set(f[0] for f in features))
 
     baseline = torch.zeros_like(rewards)
     sq_baseline = torch.zeros_like(rewards)
@@ -68,43 +69,41 @@ def calculate_baseline_and_std_per_prompt(
     else:
         reward_device = torch.device(reward_device)
 
-    for i in range(len(unique_prompts)):
-        is_matching_prompt = (prompts == unique_prompts[i]).all(1)
-        prompt_idx = torch.arange(len(prompts), device=reward_device)[
-            is_matching_prompt
-        ]
+    for i in range(len(unique_features)):
+        is_matching_feature = [f[0] == unique_features[i] for f in features]
+        feature_idx = torch.arange(len(features), device=reward_device)[is_matching_feature]
 
         if leave_one_out_baseline:
-            baseline_mask_matrix = (1 - torch.eye(len(prompt_idx))).to(reward_device)
+            baseline_mask_matrix = (1 - torch.eye(len(feature_idx))).to(reward_device)
         else:
-            baseline_mask_matrix = torch.ones((len(prompt_idx), len(prompt_idx))).to(
+            baseline_mask_matrix = torch.ones((len(feature_idx), len(feature_idx))).to(
                 reward_device
             )
 
-        if valid_mask[prompt_idx].sum() <= 1:
+        if valid_mask[feature_idx].sum() <= 1:
             # Ignore sample: there are no valid responses, so set baseline equal to reward
             # to ignore it in the loss computation
-            baseline[prompt_idx] = rewards[prompt_idx]
+            baseline[feature_idx] = rewards[feature_idx]
         else:
-            num_valid = valid_mask[prompt_idx].float().sum() - int(
+            num_valid = valid_mask[feature_idx].float().sum() - int(
                 leave_one_out_baseline
             )
-            prompt_baseline = (
+            feature_baseline = (
                 torch.matmul(
-                    baseline_mask_matrix, rewards[prompt_idx] * valid_mask[prompt_idx]
+                    baseline_mask_matrix, rewards[feature_idx] * valid_mask[feature_idx]
                 )
                 / num_valid
             )
-            prompt_baseline_square = (
+            feature_baseline_square = (
                 torch.matmul(
                     baseline_mask_matrix,
-                    (rewards[prompt_idx] ** 2) * valid_mask[prompt_idx],
+                    (rewards[feature_idx] ** 2) * valid_mask[feature_idx],
                 )
                 / num_valid
             )
 
-            baseline[prompt_idx] = prompt_baseline
-            sq_baseline[prompt_idx] = prompt_baseline_square
+            baseline[feature_idx] = feature_baseline
+            sq_baseline[feature_idx] = feature_baseline_square
 
     std = (sq_baseline - baseline.square()).sqrt().nan_to_num(0)
     return baseline, std

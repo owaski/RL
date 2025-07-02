@@ -6,7 +6,12 @@ grpo:
   num_generations_per_prompt: 16
   max_rollout_turns: 60 # Maximum turns allowed per rollout
   max_num_steps: 10000
-  max_val_samples: 128
+  normalize_rewards: false
+  use_leave_one_out_baseline: false
+  val_period: 10
+  val_at_start: true
+  max_val_samples: 512
+  val_batch_size: 512
 
 checkpointing:
   enabled: true
@@ -32,7 +37,7 @@ policy:
 
   generation:
     backend: "vllm"
-    max_new_tokens: 10
+    max_new_tokens: 20
     temperature: 1.0
     # Setting top_p/top_k to 0.999/10000 to strip out Qwen's special/illegal tokens
     # https://github.com/NVIDIA/NeMo-RL/issues/237
@@ -68,6 +73,8 @@ data:
 env:
   infinisst:
     cfg:
+      max_turn: ${grpo.max_rollout_turns}
+      model_name: ${policy.model_name}
       scoring_model_type: "Unbabel/XCOMET-XL"
       scoring_model_path: "/ckpts/llm/xcomet-xl"
       batch_size: 8

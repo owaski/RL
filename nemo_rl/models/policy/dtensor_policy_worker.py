@@ -20,6 +20,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any, Generator, Iterable, List, Optional, Set, Union, cast
 
 import ray
+import numpy as np
 import torch
 from torch import nn
 from torch.distributed.fsdp import (
@@ -669,6 +670,7 @@ class DTensorPolicyWorker:
         all_log_probs = []
         self.model.eval()
 
+        pathrow2features = {}
         with unshard_fsdp2_model(self.model), torch.no_grad():
             data.to("cuda")
             if self.cfg["dynamic_batching"]["enabled"]:
@@ -704,8 +706,23 @@ class DTensorPolicyWorker:
                         (batch_size, seq_len), dtype=torch.long, device=input_ids.device
                     )
 
+                    inputs_embeds = []
+                    embeds_layer = self.model.get_input_embeddings()
+                    for i in range(batch_size):
+                        embeds = embeds_layer(input_ids[i])
+                        mask = input_ids[i] == self.cfg["generation"]["audio_token_id"]
+
+                        npy_path, row = lp_batch["features"][i][0]
+                        if (npy_path, row) not in pathrow2features:
+                            pathrow2features[(npy_path, row)] = np.load(npy_path, mmap_mode='r')[row, :mask.sum()].copy()
+
+                        features = torch.from_numpy(pathrow2features[(npy_path, row)]).to(dtype=self.dtype, device=input_ids.device)
+                        embeds[mask] = features[:, :embeds.size(1)]
+                        inputs_embeds.append(embeds)
+                    inputs_embeds = torch.stack(inputs_embeds, dim=0)
+
                     outputs = self.model(
-                        input_ids=input_ids,
+                        inputs_embeds=inputs_embeds,
                         attention_mask=attention_mask_input_all_ones,
                         position_ids=position_ids,
                         use_cache=False,
