@@ -170,6 +170,13 @@ class DTensorPolicyWorker:
                 model_name
             ),  # due to https://github.com/huggingface/transformers/issues/38002
         )
+
+        embedding_layer = self.model.get_input_embeddings()
+        self.embedding_layer = nn.Embedding(embedding_layer.num_embeddings, embedding_layer.embedding_dim)
+        self.embedding_layer.weight.data.copy_(embedding_layer.weight.data)
+        self.embedding_layer = self.embedding_layer.cuda()
+        self.embedding_layer.requires_grad_(False)
+
         # caching since this property is not always preserved after FSDP
         self.num_tied_weights = len(find_tied_parameters(self.model))
         self.skip_tie_check = os.environ.get(
@@ -459,6 +466,7 @@ class DTensorPolicyWorker:
                 else:
                     mb_iterator = batch.make_microbatch_iterator(mbs)
 
+                pathrow2features = {}
                 for mb in mb_iterator:
                     input_ids = mb.get("input_ids").cuda()
                     input_lengths = mb.get("input_lengths")
@@ -502,8 +510,22 @@ class DTensorPolicyWorker:
 
                     with DTensorPolicyWorker.train_context(context_parallel_ctx):
                         with torch.autocast(device_type="cuda", dtype=self.dtype):
+                            inputs_embeds = []
+                            for i in range(batch_size):
+                                embeds = self.embedding_layer(input_ids[i]).to(dtype=self.dtype)
+                                mask = input_ids[i] == self.cfg["generation"]["audio_token_id"]
+
+                                npy_path, row = mb["features"][i][0]
+                                if (npy_path, row) not in pathrow2features:
+                                    pathrow2features[(npy_path, row)] = np.load(npy_path, mmap_mode='r')[row, :mask.sum()].copy()
+
+                                features = torch.from_numpy(pathrow2features[(npy_path, row)]).to(dtype=self.dtype, device=input_ids.device)
+                                embeds[mask] = features[:, :embeds.size(1)]
+                                inputs_embeds.append(embeds)
+                            inputs_embeds = torch.stack(inputs_embeds, dim=0)
+                            
                             outputs = self.model(
-                                input_ids=input_ids,
+                                inputs_embeds=inputs_embeds,
                                 attention_mask=attention_mask_input_all_ones,
                                 position_ids=position_ids,
                                 use_cache=False,

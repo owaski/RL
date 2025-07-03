@@ -18,6 +18,7 @@
 import asyncio
 import copy
 from typing import Any
+from tqdm import tqdm
 
 import ray
 import torch
@@ -348,7 +349,7 @@ def run_multi_turn_rollout(
     total_gen_tokens_per_turn = []
     active_samples_per_turn = []
 
-    for turn in range(max_rollout_turns):
+    for turn in tqdm(range(max_rollout_turns), desc="Turns"):
         if len(active_indices) == 0:
             break
 

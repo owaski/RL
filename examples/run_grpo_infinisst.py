@@ -142,7 +142,6 @@ def setup_infinisst_data(
 
     print(f"Instantiating environment for task '{task_name}'...")
     env = InfiniSSTEnv.options(
-        num_gpus=env_config["cfg"]["num_gpus"],
         runtime_env={
             "py_executable": get_actor_python_env(
                 "nemo_rl.environments.games.infinisst.InfiniSSTEnv"

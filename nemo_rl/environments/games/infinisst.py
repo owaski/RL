@@ -1,3 +1,4 @@
+import os
 import copy
 import random
 from typing import Any, Optional, TypedDict
@@ -13,13 +14,15 @@ from nemo_rl.environments.interfaces import (
     EnvironmentInterface,
     EnvironmentReturn,
 )
+from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_env
+from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES, RayVirtualCluster
 
 class InfiniSSTConfig(TypedDict):
     scoring_model_path: str
     scoring_model_type: str
     batch_size: int
     granularity: str
-    max_turn: int
+    max_turns: int
 
 class InfiniSSTMetadata(TypedDict):
     features: torch.Tensor
@@ -30,20 +33,52 @@ class InfiniSSTMetadata(TypedDict):
     chunk_frame_size: int
 
 @ray.remote
-class InfiniSSTEnv(EnvironmentInterface):
-    """InfiniSST environment (Ray Actor)."""
-
-    def __init__(self, cfg: Optional[InfiniSSTConfig] = None):
+class InfiniSSTScorer:
+    def __init__(self, cfg: InfiniSSTConfig):
         from comet import download_model, load_from_checkpoint
         self.cfg = cfg
         model_path = download_model(cfg["scoring_model_type"], saving_directory=cfg["scoring_model_path"])
         self.scoring_model = load_from_checkpoint(model_path)
         self.batch_size = cfg["batch_size"]
         self.granularity = cfg["granularity"]
-        self.max_turn = cfg["max_turn"]
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"], use_fast=True)
 
-    def compute_reward(self, message_log: LLMMessageLogType, metadata: InfiniSSTMetadata) -> float:
+    def predict(self, data: list[dict[str, str]]) -> list[float]:
+        return self.scoring_model.predict(data, batch_size=self.batch_size, gpus=1).scores
+
+@ray.remote
+class InfiniSSTEnv(EnvironmentInterface):
+    """InfiniSST environment (Ray Actor)."""
+
+    def __init__(self, cfg: Optional[InfiniSSTConfig] = None):
+        self.cfg = cfg
+        self.virtual_cluster = RayVirtualCluster(
+            bundle_ct_per_node_list=[cfg["num_gpus"]],
+            use_gpus=True,
+            name="infinisst_vc",
+        )
+        placement_groups = self.virtual_cluster.get_placement_groups()
+        
+        self.workers = []
+        for i in range(cfg["num_gpus"]):
+            pg_index = i % len(placement_groups)
+            pg = placement_groups[pg_index]
+            worker = InfiniSSTScorer.options(
+                num_gpus=1,
+                runtime_env={
+                    "py_executable": get_actor_python_env(
+                        "nemo_rl.environments.games.infinisst.InfiniSSTEnv"
+                    ),
+                },
+                scheduling_strategy=ray.util.scheduling_strategies.PlacementGroupSchedulingStrategy(
+                    placement_group=pg
+                )
+            ).remote(cfg)
+            self.workers.append(worker)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"], use_fast=True)
+        self.max_turns = cfg["max_turns"]
+
+    def compute_reward(self, message_log_batch: list[LLMMessageLogType], metadata_batch: list[InfiniSSTMetadata]) -> float:
         # TODO: delay compute reward until generate is finished
         # TODO: segment the hypothesis into sentences given reference translation sentences
 
@@ -51,7 +86,23 @@ class InfiniSSTEnv(EnvironmentInterface):
 
         # TODO: evaluate translation quality of the given granularity
 
-        return 0.0
+        comet_data = []
+        for message_log, metadata in zip(message_log_batch, metadata_batch):
+            translation = ''.join([msg["content"] for msg in message_log if msg["role"] == "assistant"])
+            reference = ''.join(metadata["tgt_segments"])
+            source = ''.join(metadata["src_segments"])
+            comet_data.append({
+                "src": source,
+                "mt": translation,
+                "ref": reference,
+            })
+        n_worker = len(self.workers)
+        comet_data_per_worker = [comet_data[i::n_worker] for i in range(n_worker)]
+        results = ray.get([self.workers[i].predict.remote(comet_data_per_worker[i]) for i in range(n_worker)])
+        scores = []
+        for i in range(len(message_log_batch)):
+            scores.append(results[i % n_worker][i // n_worker])
+        return scores
 
     def step(
         self, message_log_batch: list[LLMMessageLogType], metadata_batch: list[InfiniSSTMetadata]
@@ -63,9 +114,7 @@ class InfiniSSTEnv(EnvironmentInterface):
         all_stop_strings = []
         all_next_metadata = []
 
-        # breakpoint()
-        for message_log, metadata in zip(message_log_batch, metadata_batch):
-            step = metadata["step"]
+        for metadata in metadata_batch:
             chunk_frame_size = metadata["chunk_frame_size"]
             content = "<|video_pad|>" * chunk_frame_size
             content = self.tokenizer.decode(
@@ -75,24 +124,18 @@ class InfiniSSTEnv(EnvironmentInterface):
                     add_special_tokens=False,
                 )[20:], # remove system prompt from qwen2.5
             )
-            if step == self.max_turn - 1:
-                reward = self.compute_reward(message_log, metadata)
-                rewards.append(reward)
-                terminateds.append(True)
-                observations.append({
-                    "role": "user",
-                    "content": content,
-                })
-            else:
-                rewards.append(0)
-                terminateds.append(False)
-                observations.append({
-                    "role": "user",
-                    "content": content,
-                })
+            observations.append({"role": "user", "content": content})
+
             all_stop_strings.append(None)
             metadata["step"] += 1
-            all_next_metadata.append(metadata)
+            all_next_metadata.append(metadata)        
+            
+        if metadata_batch[0]['step'] == self.max_turns - 1:
+            rewards = self.compute_reward(message_log_batch, metadata_batch)
+            terminateds = [True] * len(message_log_batch)
+        else:
+            rewards = [0] * len(message_log_batch)
+            terminateds = [False] * len(message_log_batch)
 
         end_time = time.time()
         elapsed = end_time - start_time
