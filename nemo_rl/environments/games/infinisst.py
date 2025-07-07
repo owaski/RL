@@ -23,6 +23,8 @@ class InfiniSSTConfig(TypedDict):
     batch_size: int
     granularity: str
     max_turns: int
+    src_lang: str
+    tgt_lang: str
 
 class InfiniSSTMetadata(TypedDict):
     features: torch.Tensor
@@ -32,11 +34,25 @@ class InfiniSSTMetadata(TypedDict):
     tgt_segments: list[str]
     chunk_frame_size: int
 
+SPACY_MODELS = {
+    "en": "en_core_web_sm",
+    "ru": "ru_core_news_sm",
+    "de": "de_core_news_sm",
+    "zh": "zh_core_web_sm",
+    "ja": "ja_ginza_electra",
+    "es": "es_core_news_sm"
+}
+
 @ray.remote
 class InfiniSSTScorer:
     def __init__(self, cfg: InfiniSSTConfig):
+        import spacy
         from comet import download_model, load_from_checkpoint
+
         self.cfg = cfg
+        spacy.cli.download(SPACY_MODELS[cfg["tgt_lang"]])
+        self.segmenter = spacy.load(SPACY_MODELS[cfg["tgt_lang"]])
+
         model_path = download_model(cfg["scoring_model_type"], saving_directory=cfg["scoring_model_path"])
         self.scoring_model = load_from_checkpoint(model_path)
         self.batch_size = cfg["batch_size"]

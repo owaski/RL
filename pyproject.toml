@@ -60,7 +60,8 @@ mcore = [
     "nemo-tron",
 ]
 infinisst = [
-    "unbabel-comet>=2.2.0"
+    "unbabel-comet>=2.2.0",
+    "spacy"
 ]
 
 [dependency-groups]
