@@ -1,12 +1,14 @@
 import os
 import copy
 import random
+import re
 from typing import Any, Optional, TypedDict
 
 import ray
 import torch
 from transformers import AutoTokenizer
 import time
+from tqdm import tqdm
 
 from nemo_rl.data.interfaces import LLMMessageLogType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -34,32 +36,125 @@ class InfiniSSTMetadata(TypedDict):
     tgt_segments: list[str]
     chunk_frame_size: int
 
-SPACY_MODELS = {
-    "en": "en_core_web_sm",
-    "ru": "ru_core_news_sm",
-    "de": "de_core_news_sm",
-    "zh": "zh_core_web_sm",
-    "ja": "ja_ginza_electra",
-    "es": "es_core_news_sm"
+SENT_SPLITTERS = {
+    "en": '.,!?',
+    "ru": '.,!?',
+    "zh": '。，！？',
 }
+
+class LCME:
+    def __init__(self, cfg: InfiniSSTConfig):
+        from nemo_rl.environments.games.lcme.wmtAlign import load_alternative_model
+
+        self.cfg = cfg
+        self.tokenizer, self.model = load_alternative_model('cuda', 'BAAI/bge-m3')
+
+    def segment(self, data: list[dict[str, str]]) -> list[str]:
+        from nemo_rl.environments.games.lcme.wmtAlign import generate_overlap_and_embedding, run_vecalign_explore
+        src_tgt_alignmentss = []
+        features_to_overlap_emb = {}
+        for idx, instance in enumerate(tqdm(data, desc="Running VecAlign")):
+            tgt_sentences = instance["tgt_sents"]
+            src_sentences = instance["src_sents"]
+            ref_sentences = instance["ref_sents"]
+            features_id, doc_id = instance["id"].split('_')
+
+            if len(tgt_sentences) == 0:
+                src_tgt_alignmentss.append([
+                    ([idx], [])
+                    for idx in range(len(src_sentences))
+                ])
+                continue
+            
+            if features_id not in features_to_overlap_emb:
+                src_overlap, src_embed = generate_overlap_and_embedding("\n".join(src_sentences), self.model, self.tokenizer, 10)
+                features_to_overlap_emb[features_id] = (src_overlap, src_embed)
+            else:
+                src_overlap, src_embed = features_to_overlap_emb[features_id]
+            
+            tgt_overlap, tgt_embed = generate_overlap_and_embedding("\n".join(tgt_sentences), self.model, self.tokenizer, 10)
+
+            src_tgt_alignments = run_vecalign_explore(
+                "\n".join(src_sentences), "\n".join(tgt_sentences),
+                src_overlap, tgt_overlap, src_embed, tgt_embed,
+                doc_id, 10
+            )
+
+            src_tgt_alignmentss.append(src_tgt_alignments)
+        return src_tgt_alignmentss
 
 @ray.remote
 class InfiniSSTScorer:
     def __init__(self, cfg: InfiniSSTConfig):
-        import spacy
-        from comet import download_model, load_from_checkpoint
-
         self.cfg = cfg
-        spacy.cli.download(SPACY_MODELS[cfg["tgt_lang"]])
-        self.segmenter = spacy.load(SPACY_MODELS[cfg["tgt_lang"]])
+        self.sent_splitter = SENT_SPLITTERS[cfg["tgt_lang"]]
+        self.segmenter = LCME(cfg)
 
+        from comet import download_model, load_from_checkpoint
         model_path = download_model(cfg["scoring_model_type"], saving_directory=cfg["scoring_model_path"])
         self.scoring_model = load_from_checkpoint(model_path)
+        self.worst_score = 0 if 'comet' in cfg["scoring_model_type"].lower() else -25
         self.batch_size = cfg["batch_size"]
         self.granularity = cfg["granularity"]
 
     def predict(self, data: list[dict[str, str]]) -> list[float]:
-        return self.scoring_model.predict(data, batch_size=self.batch_size, gpus=1).scores
+        for instance in data:
+            tgt_text = instance["tgt_text"]
+
+            tgt_sentences = []
+            paragraphs = tgt_text.split('\n')
+            for paragraph in paragraphs:
+                if paragraph.strip():
+                    sentences = []
+                    current_sentence = ""
+                    for char in paragraph:
+                        current_sentence += char
+                        if char in self.sent_splitter:
+                            if current_sentence.strip():
+                                sentences.append(current_sentence.strip())
+                            current_sentence = ""
+                    if current_sentence.strip():
+                        sentences.append(current_sentence.strip())
+                    tgt_sentences.extend(sentences)
+            
+            instance["tgt_sents"] = tgt_sentences
+
+        src_tgt_alignmentss = self.segmenter.segment(data)
+
+        src_sep = '' if self.cfg["src_lang"] in ['zh', 'ja'] else ' '
+        tgt_sep = '' if self.cfg["tgt_lang"] in ['zh', 'ja'] else ' '
+
+        rewards = [[] for _ in range(len(data))]
+        instance2data = []
+        scorer_data = []
+        for idx, src_tgt_alignments in enumerate(src_tgt_alignmentss):
+            src_sentences = data[idx]["src_sents"]
+            ref_sentences = data[idx]["ref_sents"]
+            tgt_sentences = data[idx]["tgt_sents"]
+
+            for src_indices, tgt_indices in src_tgt_alignments:
+                if len(src_indices) == 0 or len(tgt_indices) == 0:
+                    rewards[idx].append(self.worst_score)
+                    continue
+                src_sentence = src_sep.join([src_sentences[i] for i in src_indices])
+                ref_sentence = tgt_sep.join([ref_sentences[i] for i in src_indices])
+                tgt_sentence = tgt_sep.join([tgt_sentences[i] for i in tgt_indices])
+
+                scorer_data.append({
+                    "src": src_sentence,
+                    "ref": ref_sentence,
+                    "mt": tgt_sentence,
+                })
+                instance2data.append(idx)
+
+        scores = self.scoring_model.predict(scorer_data, batch_size=self.batch_size, gpus=1).scores
+        for i, idx in enumerate(instance2data):
+            rewards[idx].append(scores[i])
+        
+        mean_rewards = []
+        for reward_list in rewards:
+            mean_rewards.append(sum(reward_list) / len(reward_list))
+        return mean_rewards
 
 @ray.remote
 class InfiniSSTEnv(EnvironmentInterface):
@@ -95,26 +190,19 @@ class InfiniSSTEnv(EnvironmentInterface):
         self.max_turns = cfg["max_turns"]
 
     def compute_reward(self, message_log_batch: list[LLMMessageLogType], metadata_batch: list[InfiniSSTMetadata]) -> float:
-        # TODO: delay compute reward until generate is finished
-        # TODO: segment the hypothesis into sentences given reference translation sentences
-
-        # TODO: compute latency contribution of each token in the hypothesis
-
-        # TODO: evaluate translation quality of the given granularity
-
-        comet_data = []
-        for message_log, metadata in zip(message_log_batch, metadata_batch):
+        scorer_data = []
+        for idx, (message_log, metadata) in enumerate(zip(message_log_batch, metadata_batch)):
             translation = ''.join([msg["content"] for msg in message_log if msg["role"] == "assistant"])
-            reference = ''.join(metadata["tgt_segments"])
-            source = ''.join(metadata["src_segments"])
-            comet_data.append({
-                "src": source,
-                "mt": translation,
-                "ref": reference,
+            features_id = str(abs(hash(f"{message_log[0]['features'][0]}-{message_log[0]['features'][1]}")))
+            scorer_data.append({
+                "id": f"{features_id}_{idx}",
+                "src_sents": metadata["src_segments"],
+                "ref_sents": metadata["tgt_segments"],
+                "tgt_text": translation,
             })
         n_worker = len(self.workers)
-        comet_data_per_worker = [comet_data[i::n_worker] for i in range(n_worker)]
-        results = ray.get([self.workers[i].predict.remote(comet_data_per_worker[i]) for i in range(n_worker)])
+        scorer_data_per_worker = [scorer_data[i::n_worker] for i in range(n_worker)]
+        results = ray.get([self.workers[i].predict.remote(scorer_data_per_worker[i]) for i in range(n_worker)])
         scores = []
         for i in range(len(message_log_batch)):
             scores.append(results[i % n_worker][i // n_worker])

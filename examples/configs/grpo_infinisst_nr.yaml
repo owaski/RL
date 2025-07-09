@@ -1,0 +1,13 @@
+# GRPO Algorithm Configuration
+defaults: "grpo_infinisst.yaml"
+
+grpo:
+  normalize_rewards: true
+
+checkpointing:
+  checkpoint_dir: "results/grpo-infinisst-lcme-nr"
+
+logger:
+  wandb:
+    project: "grpo-dev"
+    name: "infinisst-lcme-nr"

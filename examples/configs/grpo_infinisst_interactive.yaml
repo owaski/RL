@@ -1,0 +1,32 @@
+# GRPO Algorithm Configuration
+defaults: "grpo_infinisst.yaml"
+
+grpo:
+  num_prompts_per_step: 1
+  max_rollout_turns: 60 # Maximum turns allowed per rollout
+  val_at_start: false
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: "results/debug"
+  metric_name: "val_reward"
+  higher_is_better: true
+  keep_top_k: 3
+  save_period: 10
+  
+policy:
+  train_global_batch_size: 1
+  dtensor_cfg:
+    tensor_parallel_size: 1
+ 
+env:
+  infinisst:
+    cfg:
+      num_gpus: 1
+      
+logger:
+  wandb_enabled: false
+
+cluster:
+  gpus_per_node: 1
+  num_nodes: 1

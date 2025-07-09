@@ -15,7 +15,7 @@ grpo:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/grpo-infinisst"
+  checkpoint_dir: "results/grpo-infinisst-lcme"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
@@ -81,7 +81,7 @@ env:
       scoring_model_path: "/ckpts/llm/xcomet-xl"
       batch_size: 32
       granularity: "whole" # "span", "sentence", "whole"
-      num_gpus: 8
+      num_gpus: 16
       src_lang: ${data.src_lang}
       tgt_lang: ${data.tgt_lang}
       
@@ -93,7 +93,7 @@ logger:
   monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
   wandb:
     project: "grpo-dev"
-    name: "grpo-dev-infinisst"
+    name: "infinisst-lcme"
   tensorboard: {}
   gpu_monitoring:
     collection_interval: 10  # How often to collect GPU usage metrics (in seconds)

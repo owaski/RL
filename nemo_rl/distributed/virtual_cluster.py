@@ -55,7 +55,7 @@ class PY_EXECUTABLES:
     MCORE = "uv run --reinstall --extra mcore"
 
     # InfiniSST
-    INFINISSST = "uv run --extra infinisst"
+    INFINISST = "uv run --locked --extra infinisst"
 
 
 @ray.remote

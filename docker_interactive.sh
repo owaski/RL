@@ -21,5 +21,6 @@ sbatch \
     ray.sub
 
 export NRL_VLLM_USE_V1=0
-export PYTHONPATH=/code/RL:$PYTHONPATHuv 
-uv python examples/run_grpo_infinisst.py
+export PYTHONPATH=/code/RL:$PYTHONPATH
+uv run python examples/run_grpo_infinisst.py \
+    --config examples/configs/grpo_infinisst_interactive.yaml

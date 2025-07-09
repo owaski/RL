@@ -61,7 +61,7 @@ mcore = [
 ]
 infinisst = [
     "unbabel-comet>=2.2.0",
-    "spacy"
+    "cython-npm",
 ]
 
 [dependency-groups]
